@@ -76,17 +76,14 @@ module tb_npu_flex_crossbar_stress;
     localparam logic [31:0] MGR_SLOT0_STATUS = 32'h0000_1008;
 
     // Slot 0 Control CSR Offsets (Accessed by CPU at CTRL_BASE_ADDR + REG_*)
-    localparam logic [31:0] REG_CTRL        = 32'h0000_0000;
-    localparam logic [31:0] REG_STATUS      = 32'h0000_0004;
-    localparam logic [31:0] REG_CONFIG      = 32'h0000_0008;
-    localparam logic [31:0] REG_IRQ_STATUS  = 32'h0000_000C;
-    localparam logic [31:0] REG_ACT_BASE    = 32'h0000_0010;
-    localparam logic [31:0] REG_WEIGHT_BASE = 32'h0000_0014;
-    localparam logic [31:0] REG_OUT_BASE    = 32'h0000_0018;
-    localparam logic [31:0] REG_BIAS_BASE   = 32'h0000_001C;
-    localparam logic [31:0] REG_QUANT_BASE  = 32'h0000_0020;
-    localparam logic [31:0] REG_LUT_BASE    = 32'h0000_0024;
-    localparam logic [31:0] REG_GEOM        = 32'h0000_0028;
+    localparam logic [31:0] REG_CONFIG      = 32'h0000_0000;
+    localparam logic [31:0] REG_ACT_BASE    = 32'h0000_0004;
+    localparam logic [31:0] REG_WEIGHT_BASE = 32'h0000_0008;
+    localparam logic [31:0] REG_OUT_BASE    = 32'h0000_000C;
+    localparam logic [31:0] REG_BIAS_BASE   = 32'h0000_0010;
+    localparam logic [31:0] REG_QUANT_BASE  = 32'h0000_0014;
+    localparam logic [31:0] REG_LUT_BASE    = 32'h0000_0018;
+    localparam logic [31:0] REG_GEOM        = 32'h0000_001C;
 
     // System RAM Buffer Addresses (Byte Addresses inside 512 KB RAM)
     localparam logic [31:0] ACT_BUF_A_BASE   = 32'h0000_0000; // 128 KB Ping Buffer (L1 in, L2 out, L4 out)
@@ -934,18 +931,17 @@ module tb_npu_flex_crossbar_stress;
         tb_axi_rready <= 1'b0;
     endtask
 
-    // Wait for NPU completion while injecting randomized CPU S0 <-> M0 RAM read/write
-    // operations over the shared bus to induce random AXI stalls and latency on S1
+    // Wait for NPU completion (soc_usr_irq[0]) while injecting randomized CPU S0 <-> M0
+    // RAM read/write operations over the shared bus to induce random AXI stalls on S1
     task automatic cpu_wait_for_npu_done_with_bus_stress();
-        logic [31:0] status_val;
         logic [31:0] rng;
         int          num_txns, burst_len, word_offset, idle_gap;
         bit          is_write;
-        status_val = 32'd0;
 
-        while (!status_val[1]) begin
+        @(posedge clk);
+        while (soc_usr_irq[0] !== 1'b1) begin
             rng      = next_prng();
-            num_txns = 1 + int'(rng[1:0]); // 1..4 random transactions per status poll
+            num_txns = 1 + int'(rng[1:0]); // 1..4 random transactions per iteration
 
             for (int t = 0; t < num_txns; t++) begin
                 rng         = next_prng();
@@ -977,9 +973,6 @@ module tb_npu_flex_crossbar_stress;
                 end
                 arb_stress_words_xfr += burst_len;
             end
-
-            // Poll NPU REG_STATUS via Shared Interconnect M1 (axi_axil_adapter)
-            cpu_csr_read(REG_STATUS, status_val);
         end
     endtask
 
@@ -1259,7 +1252,6 @@ module tb_npu_flex_crossbar_stress;
     );
         int tiles_y, tiles_x, h_out, w_out, num_strips_out, w_stride_out, grp_out_bytes, w_pass_bytes;
         bit is_pool, is_1x1;
-        logic [31:0] irq_reg;
 
         tiles_y        = (h_in + 15) / 16;
         tiles_x        = (w_in + 15) / 16;
@@ -1274,7 +1266,6 @@ module tb_npu_flex_crossbar_stress;
 
         cpu_csr_write(REG_ACT_BASE, act_base);
         cpu_csr_write(REG_LUT_BASE, LUT_BASE_ADDR);
-        cpu_csr_write(REG_CONFIG,   {16'd0, 8'(num_passes), cfg_flags});
 
         for (int g = 0; g < cout_groups; g++) begin
             cpu_csr_write(REG_WEIGHT_BASE, w_base   + g * (num_passes * w_pass_bytes));
@@ -1284,14 +1275,9 @@ module tb_npu_flex_crossbar_stress;
 
             for (int ty = 0; ty < tiles_y; ty++) begin
                 for (int tx = 0; tx < tiles_x; tx++) begin
-                    cpu_csr_write(REG_GEOM, {8'(cin_dim), 8'(h_in), 8'(w_in), 4'(ty), 4'(tx)});
-                    cpu_csr_write(REG_CTRL, 32'h0000_0001); // START (Compute + Auto-Drain)
+                    cpu_csr_write(REG_GEOM,   {8'(cin_dim), 8'(h_in), 8'(w_in), 4'(ty), 4'(tx)});
+                    cpu_csr_write(REG_CONFIG, {16'd0, 8'(num_passes), cfg_flags | 8'h02}); // START=1 (bit 1) + Auto-Drain
                     cpu_wait_for_npu_done_with_bus_stress();
-
-                    cpu_csr_read(REG_IRQ_STATUS, irq_reg);
-                    if (!irq_reg[0])
-                        $fatal(1, "IRQ_STATUS not set on %s Group %0d Tile (%0d,%0d)!", layer_name, g, ty, tx);
-                    cpu_csr_write(REG_IRQ_STATUS, 32'h0000_0001);
                 end
             end
             $display("  -> %s Group %0d/%0d (%0dx%0d tiles) complete | Bus Stress: %0d WR, %0d RD bursts (%0d words)",

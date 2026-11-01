@@ -29,15 +29,10 @@ module npu_flex_fsm #(
     input  wire        writer_done_i,
 
     output logic [2:0]  state_o,
-    output logic        busy_o,
     output logic        done_o,
 
     output logic [10:0] pass_cnt_o,
     output logic [8:0]  k_cnt_o,
-
-    output logic        preload_phase_o,
-    output logic        lut_phase_o,
-    output logic        drain_phase_o,
     output logic [10:0] drain_cnt_o,
 
     output logic       preload_done_o,
@@ -53,7 +48,6 @@ module npu_flex_fsm #(
     localparam logic [2:0] SEQ_COMPUTE  = 3'd2;
     localparam logic [2:0] SEQ_LUT_LOAD = 3'd3;
     localparam logic [2:0] SEQ_DRAIN    = 3'd4;
-    localparam logic [2:0] SEQ_DONE     = 3'd5;
 
     localparam logic [10:0] LUT_LIMIT = 11'd255;
 
@@ -75,13 +69,13 @@ module npu_flex_fsm #(
                           ((k_cnt == 9'd264) || (k_cnt >= 9'd271));
     wire enter_lut_load = (state_reg == SEQ_COMPUTE) && is_final_pass && (k_cnt == 9'd271) &&
                           auto_drain_i && lut_en_i;
+    wire comp_done      = (state_reg == SEQ_COMPUTE) && is_final_pass && (k_cnt == 9'd271) && !auto_drain_i;
+    wire drain_done     = (state_reg == SEQ_DRAIN) && writer_done_i;
 
     assign state_o             = state_reg;
+    assign done_o              = comp_done || drain_done;
     assign pass_cnt_o          = pass_cnt;
     assign k_cnt_o             = k_cnt;
-    assign preload_phase_o     = (state_reg == SEQ_PRELOAD);
-    assign lut_phase_o         = (state_reg == SEQ_LUT_LOAD);
-    assign drain_phase_o       = (state_reg == SEQ_DRAIN);
     assign drain_cnt_o         = drain_cnt;
     assign preload_done_o      = preload_done;
     assign pass_advance_o      = pass_advance;
@@ -93,27 +87,20 @@ module npu_flex_fsm #(
     always_ff @(posedge clk_i) begin
         if (!rst_n) begin
             state_reg         <= SEQ_IDLE;
-            busy_o            <= 1'b0;
-            done_o            <= 1'b0;
             pass_cnt          <= '0;
             drain_cnt         <= '0;
             first_pass        <= 1'b0;
             prev_pass_drained <= 1'b0;
         end else begin
-            done_o <= 1'b0;
-
             case (state_reg)
                 SEQ_IDLE: begin
-                    busy_o <= 1'b0;
                     if (start_i) begin
-                        busy_o            <= 1'b1;
                         pass_cnt          <= pass_cnt_m1;
                         drain_cnt         <= '0;
                         first_pass        <= 1'b1;
                         prev_pass_drained <= 1'b0;
                         state_reg         <= SEQ_PRELOAD;
                     end else if (start_drain_i) begin
-                        busy_o    <= 1'b1;
                         drain_cnt <= '0;
                         state_reg <= lut_en_i ? SEQ_LUT_LOAD : SEQ_DRAIN;
                     end
@@ -134,9 +121,7 @@ module npu_flex_fsm #(
                             if (auto_drain_i) begin
                                 state_reg <= lut_en_i ? SEQ_LUT_LOAD : SEQ_DRAIN;
                             end else begin
-                                done_o    <= 1'b1;
-                                busy_o    <= 1'b0;
-                                state_reg <= SEQ_DONE;
+                                state_reg <= SEQ_IDLE;
                             end
                         end else begin
                             drain_cnt <= drain_cnt + 11'd1;
@@ -167,14 +152,8 @@ module npu_flex_fsm #(
                         drain_cnt <= drain_cnt + 11'd1;
                     end
                     if (writer_done_i) begin
-                        done_o    <= 1'b1;
-                        busy_o    <= 1'b0;
-                        state_reg <= SEQ_DONE;
+                        state_reg <= SEQ_IDLE;
                     end
-                end
-
-                SEQ_DONE: begin
-                    state_reg <= SEQ_IDLE;
                 end
 
                 default: state_reg <= SEQ_IDLE;

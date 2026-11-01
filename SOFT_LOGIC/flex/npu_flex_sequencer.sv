@@ -91,12 +91,6 @@ module npu_flex_sequencer #(
     // User Interrupt Output (to efpga_manager)
     output logic [3:0]                                   usr_irq_o,
 
-    // Status & Progression Outputs
-    output logic                                         busy_o,
-    output logic                                         done_o,
-    output logic [10:0]                                  current_pass_o,
-    output logic [8:0]                                   cycle_in_pass_o,
-
     // Array Mode Controls
     output logic                                         array_en_o,
     output logic                                         psum_systolic_en_o,
@@ -127,15 +121,7 @@ module npu_flex_sequencer #(
     output logic signed [PSUM_WIDTH-1:0]                 psum_A_wdata_o,
     output logic [7:0]                                   psum_B_addr_o,
     output logic [ARRAY_WIDTH-1:0]                       psum_B_we_o,
-    output logic signed [PSUM_WIDTH-1:0]                 psum_B_wdata_o,
-
-    // Phase & Drain Synchronization
-    output logic                                         preload_phase_o,
-    output logic signed [11:0]                           dma_channel_to_load_o,
-    output logic [7:0][5:0]                              dma_bank_ptr_o,
-    output logic                                         lut_phase_o,
-    output logic                                         drain_phase_o,
-    output logic [10:0]                                  drain_step_o
+    output logic signed [PSUM_WIDTH-1:0]                 psum_B_wdata_o
 );
 
     localparam logic [2:0] SEQ_COMPUTE = 3'd2;
@@ -144,7 +130,6 @@ module npu_flex_sequencer #(
     // Decoded CSR Signals
     wire        start_pulse;
     wire        start_drain_pulse;
-    wire        soft_reset;
     wire        auto_drain;
     wire        mode_1x1;
     wire        lut_en;
@@ -164,10 +149,8 @@ module npu_flex_sequencer #(
     wire [31:0] lut_base;
 
     wire [10:0] total_passes = (csr_total_passes != 11'd0) ? csr_total_passes : 11'(TOTAL_PASSES);
-    wire        sys_rst_n    = rst_n && !soft_reset;
 
     wire [2:0]                    state;
-    wire                          fsm_busy;
     wire                          fsm_done;
     wire [10:0]                   pass_cnt;
     wire [8:0]                    k_cnt;
@@ -255,7 +238,7 @@ module npu_flex_sequencer #(
     wire  [22:0] shared_ch_plus_shifted = ch_add_op_a + ch_add_op_b;
 
     always_ff @(posedge clk_i) begin
-        if (!sys_rst_n) begin
+        if (!rst_n) begin
             shared_ch_addr <= 23'd0;
         end else if (ch_init || ch_adv) begin
             shared_ch_addr <= shared_ch_plus_shifted;
@@ -269,17 +252,6 @@ module npu_flex_sequencer #(
     assign shared_row_lt_h[1] = gy_lt_hi || (gy_eq_hi && h_eff[1]);
     assign shared_row_lt_h[2] = gy_lt_hi || (gy_eq_hi && (h_eff[1:0] == 2'd3));
     assign shared_row_lt_h[3] = gy_lt_hi;
-
-    assign busy_o                = 1'b0;
-    assign done_o                = 1'b0;
-    assign current_pass_o        = '0;
-    assign cycle_in_pass_o       = '0;
-    assign preload_phase_o       = 1'b0;
-    assign lut_phase_o           = 1'b0;
-    assign drain_phase_o         = 1'b0;
-    assign drain_step_o          = '0;
-    assign dma_channel_to_load_o = -12'sd1;
-    assign dma_bank_ptr_o        = '0;
 
     assign array_en_o            = (state == SEQ_COMPUTE);
     assign psum_systolic_en_o    = (state == SEQ_COMPUTE);
@@ -321,7 +293,6 @@ module npu_flex_sequencer #(
         .s_axil_rready      (s_axil_rready),
         .start_pulse_o      (start_pulse),
         .start_drain_pulse_o(start_drain_pulse),
-        .soft_reset_o       (soft_reset),
         .auto_drain_o       (auto_drain),
         .mode_1x1_o         (mode_1x1),
         .lut_en_o           (lut_en),
@@ -340,7 +311,6 @@ module npu_flex_sequencer #(
         .quant_base_o       (quant_base),
         .lut_base_o         (lut_base),
         .usr_irq_o          (usr_irq_o),
-        .fsm_busy_i         (fsm_busy),
         .fsm_done_i         (fsm_done)
     );
 
@@ -350,7 +320,7 @@ module npu_flex_sequencer #(
         .ARRAY_WIDTH (ARRAY_WIDTH)
     ) fsm_inst (
         .clk_i              (clk_i),
-        .rst_n              (sys_rst_n),
+        .rst_n              (rst_n),
         .start_i            (start_pulse),
         .start_drain_i      (start_drain_pulse),
         .auto_drain_i       (auto_drain),
@@ -361,13 +331,9 @@ module npu_flex_sequencer #(
         .lut_we_i           (lut_we),
         .writer_done_i      (writer_done),
         .state_o            (state),
-        .busy_o             (fsm_busy),
         .done_o             (fsm_done),
         .pass_cnt_o         (pass_cnt),
         .k_cnt_o            (k_cnt),
-        .preload_phase_o    (),
-        .lut_phase_o        (),
-        .drain_phase_o      (),
         .drain_cnt_o        (drain_cnt),
         .preload_done_o     (preload_done),
         .pass_advance_o     (pass_advance),
@@ -389,7 +355,7 @@ module npu_flex_sequencer #(
         .FIFO_DEPTH      (FIFO_DEPTH)
     ) axi_reader_inst (
         .clk_i                  (clk_i),
-        .rst_n                  (sys_rst_n),
+        .rst_n                  (rst_n),
         .start_i                (start_pulse),
         .start_drain_i          (start_drain_pulse),
         .mode_1x1_i             (mode_1x1),
@@ -481,7 +447,7 @@ module npu_flex_sequencer #(
         .ARRAY_HEIGHT(ARRAY_HEIGHT)
     ) addr_inst (
         .clk_i           (clk_i),
-        .rst_n           (sys_rst_n),
+        .rst_n           (rst_n),
         .mode_1x1_i      (mode_1x1),
         .state_i         (state),
         .pass_cnt_i      (pass_cnt),
@@ -505,7 +471,7 @@ module npu_flex_sequencer #(
         .AXI_DATA_WIDTH  (AXI_DATA_WIDTH)
     ) axi_writer_inst (
         .clk_i                   (clk_i),
-        .rst_n                   (sys_rst_n),
+        .rst_n                   (rst_n),
         .state_i                 (state),
         .drain_cnt_i             (drain_cnt),
         .lut_en_i                (lut_en),

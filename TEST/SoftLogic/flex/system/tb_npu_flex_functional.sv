@@ -42,17 +42,14 @@ module tb_npu_flex_functional;
     localparam int POOL_W = 16;
 
     // AXI-Lite Register Byte Offsets
-    localparam logic [9:0] REG_CTRL        = 10'h000;
-    localparam logic [9:0] REG_STATUS      = 10'h004;
-    localparam logic [9:0] REG_CONFIG      = 10'h008;
-    localparam logic [9:0] REG_IRQ_STATUS  = 10'h00C;
-    localparam logic [9:0] REG_ACT_BASE    = 10'h010;
-    localparam logic [9:0] REG_WEIGHT_BASE = 10'h014;
-    localparam logic [9:0] REG_OUT_BASE    = 10'h018;
-    localparam logic [9:0] REG_BIAS_BASE   = 10'h01C;
-    localparam logic [9:0] REG_QUANT_BASE  = 10'h020;
-    localparam logic [9:0] REG_LUT_BASE    = 10'h024;
-    localparam logic [9:0] REG_GEOM        = 10'h028;
+    localparam logic [9:0] REG_CONFIG      = 10'h000;
+    localparam logic [9:0] REG_ACT_BASE    = 10'h004;
+    localparam logic [9:0] REG_WEIGHT_BASE = 10'h008;
+    localparam logic [9:0] REG_OUT_BASE    = 10'h00C;
+    localparam logic [9:0] REG_BIAS_BASE   = 10'h010;
+    localparam logic [9:0] REG_QUANT_BASE  = 10'h014;
+    localparam logic [9:0] REG_LUT_BASE    = 10'h018;
+    localparam logic [9:0] REG_GEOM        = 10'h01C;
 
     // System RAM Base Addresses (Byte Addresses)
     localparam logic [31:0] ACT_BASE_ADDR    = 32'h0000_0000;
@@ -110,17 +107,7 @@ module tb_npu_flex_functional;
     wire         fab_axil_rvalid;
     wire         fab_axil_rready;
 
-    // Sequencer Status & Step Outputs
-    wire               seq_busy;
-    wire               seq_done;
-    wire [10:0]        current_pass;
-    wire [8:0]         cycle_in_pass;
-    wire               preload_phase;
-    wire signed [11:0] dma_channel_to_load;
-    wire [7:0][5:0]    dma_bank_ptr;
-    wire               lut_phase;
-    wire               drain_phase;
-    wire [10:0]        drain_step;
+    // Sequencer User Interrupt Output
     wire [3:0]         fab_usr_irq;
     wire [3:0]         soc_usr_irq;
 
@@ -537,10 +524,6 @@ module tb_npu_flex_functional;
         .m_axi_rvalid         (fab_axi_rvalid),
         .m_axi_rready         (fab_axi_rready),
         .usr_irq_o            (fab_usr_irq),
-        .busy_o               (seq_busy),
-        .done_o               (seq_done),
-        .current_pass_o       (current_pass),
-        .cycle_in_pass_o      (cycle_in_pass),
         .array_en_o           (fab_npu_array_en),
         .psum_systolic_en_o   (fab_npu_psum_systolic_en),
         .psum_skew_en_o       (fab_npu_psum_skew_en),
@@ -562,13 +545,7 @@ module tb_npu_flex_functional;
         .psum_A_wdata_o       (fab_psum_A_wdata),
         .psum_B_addr_o        (fab_psum_B_addr),
         .psum_B_we_o          (fab_psum_B_we),
-        .psum_B_wdata_o       (fab_psum_B_wdata),
-        .preload_phase_o      (preload_phase),
-        .dma_channel_to_load_o(dma_channel_to_load),
-        .dma_bank_ptr_o       (dma_bank_ptr),
-        .lut_phase_o          (lut_phase),
-        .drain_phase_o        (drain_phase),
-        .drain_step_o         (drain_step)
+        .psum_B_wdata_o       (fab_psum_B_wdata)
     );
 
     // =========================================================================
@@ -639,29 +616,9 @@ module tb_npu_flex_functional;
         s_axil_bready  <= 1'b0;
     endtask
 
-    task automatic axil_read(input logic [9:0] addr, output logic [31:0] data);
-        @(posedge clk);
-        s_axil_araddr  <= addr;
-        s_axil_arprot  <= 3'd0;
-        s_axil_arvalid <= 1'b1;
-        s_axil_rready  <= 1'b1;
-
-        while (!s_axil_arready) @(posedge clk);
-        @(posedge clk);
-        s_axil_arvalid <= 1'b0;
-
-        while (!s_axil_rvalid) @(posedge clk);
-        data = s_axil_rdata;
-        @(posedge clk);
-        s_axil_rready  <= 1'b0;
-    endtask
-
     task automatic wait_for_done();
-        logic [31:0] status_val;
-        status_val = 32'd0;
-        while (!status_val[1]) begin
-            axil_read(REG_STATUS, status_val);
-        end
+        @(posedge clk);
+        while (soc_usr_irq[0] !== 1'b1) @(posedge clk);
     endtask
 
     // =========================================================================
@@ -928,7 +885,6 @@ module tb_npu_flex_functional;
         for (int ty = 0; ty < 2; ty++) begin
             for (int tx = 0; tx < 2; tx++) begin
                 int tile_errors;
-                logic [31:0] irq_reg;
                 tile_errors   = 0;
                 curr_tile_idx = ty * 2 + tx;
 
@@ -937,17 +893,9 @@ module tb_npu_flex_functional;
                 // Program REG_GEOM: {cfg_cin=8, img_h=32, img_w=32, tile_y=ty, tile_x=tx}
                 axil_write(REG_GEOM, {8'd8, 8'd32, 8'd32, 4'(ty), 4'(tx)});
 
-                // Program REG_CONFIG: total_passes=9, auto_drain=0, lut_en=0
-                axil_write(REG_CONFIG, {16'd0, 8'd9, 8'h00});
-
-                // Trigger START via REG_CTRL[0]
-                axil_write(REG_CTRL, 32'h0000_0001);
+                // Program REG_CONFIG and trigger START (bit 1): total_passes=9, auto_drain=0, lut_en=0
+                axil_write(REG_CONFIG, {16'd0, 8'd9, 8'h02});
                 wait_for_done();
-
-                // Verify and clear sticky IRQ status via REG_IRQ_STATUS
-                axil_read(REG_IRQ_STATUS, irq_reg);
-                if (!irq_reg[0]) $fatal(1, "IRQ_STATUS not set after Tile (%0d,%0d)!", ty, tx);
-                axil_write(REG_IRQ_STATUS, 32'h0000_0001);
 
                 // 1. Raw 32-bit PSUM Peek Verification (256 pixels x 8 channels)
                 tb_peek_en = 1'b1;
@@ -985,28 +933,24 @@ module tb_npu_flex_functional;
                 else
                     $display("     [FAIL] Tile (%0d,%0d) Raw 32-bit PSUM Peek: %0d/2048 errors!", ty, tx, tile_errors);
 
-                // 2. Mode A Hardware Drain (Linear Requant, pool_en=0, lut_en=0) -> OUT_MODE_A_BASE
+                // 2. Mode A Hardware Drain (Linear Requant, pool_en=0, lut_en=0, START_DRAIN=1) -> OUT_MODE_A_BASE
                 axil_write(REG_OUT_BASE, OUT_MODE_A_BASE);
-                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h00}); // lut_en=0, pool_en=0
-                axil_write(REG_CTRL,     32'h0000_0004);        // START_DRAIN
+                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h04});
                 wait_for_done();
 
-                // 3. Mode B Hardware Drain (Mish LUT Requant, pool_en=0, lut_en=1) -> OUT_MODE_B_BASE
+                // 3. Mode B Hardware Drain (Mish LUT Requant, pool_en=0, lut_en=1, START_DRAIN=1) -> OUT_MODE_B_BASE
                 axil_write(REG_OUT_BASE, OUT_MODE_B_BASE);
-                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h20}); // lut_en=1 (bit 5), pool_en=0
-                axil_write(REG_CTRL,     32'h0000_0004);        // START_DRAIN
+                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h24});
                 wait_for_done();
 
-                // 4. Mode C Hardware Drain (Linear + 2x2 MaxPool, pool_en=1, lut_en=0) -> OUT_MODE_C_BASE
+                // 4. Mode C Hardware Drain (Linear + 2x2 MaxPool, pool_en=1, lut_en=0, START_DRAIN=1) -> OUT_MODE_C_BASE
                 axil_write(REG_OUT_BASE, OUT_MODE_C_BASE);
-                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h40}); // lut_en=0, pool_en=1 (bit 6)
-                axil_write(REG_CTRL,     32'h0000_0004);        // START_DRAIN
+                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h44});
                 wait_for_done();
 
-                // 5. Mode D Hardware Drain (Mish LUT + 2x2 MaxPool, pool_en=1, lut_en=1) -> OUT_MODE_D_BASE
+                // 5. Mode D Hardware Drain (Mish LUT + 2x2 MaxPool, pool_en=1, lut_en=1, START_DRAIN=1) -> OUT_MODE_D_BASE
                 axil_write(REG_OUT_BASE, OUT_MODE_D_BASE);
-                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h60}); // lut_en=1 (bit 5), pool_en=1 (bit 6)
-                axil_write(REG_CTRL,     32'h0000_0004);        // START_DRAIN
+                axil_write(REG_CONFIG,   {16'd0, 8'd9, 8'h64});
                 wait_for_done();
             end
         end
@@ -1098,8 +1042,7 @@ module tb_npu_flex_functional;
                 // Program REG_GEOM: {cfg_cin=5, img_h=21, img_w=19, tile_y=ty, tile_x=tx}
                 axil_write(REG_OUT_BASE, OUT_MODE_A_BASE);
                 axil_write(REG_GEOM,     {8'd5, 8'd21, 8'd19, 4'(ty), 4'(tx)});
-                axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h01}); // total_passes=6, auto_drain=1
-                axil_write(REG_CTRL,     32'h0000_0001);
+                axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h03}); // total_passes=6, auto_drain=1, START=1
                 wait_for_done();
 
                 tb_peek_en = 1'b1;
@@ -1215,8 +1158,7 @@ module tb_npu_flex_functional;
 
             // Program REG_GEOM: {cfg_cin=24, img_h=16, img_w=16, tile_y=0, tile_x=0}
             axil_write(REG_GEOM,   {8'd24, 8'd16, 8'd16, 4'd0, 4'd0});
-            axil_write(REG_CONFIG, {16'd0, 8'd6, 8'h10}); // mode_1x1=1 (bit 4), auto_drain=0
-            axil_write(REG_CTRL,   32'h0000_0001);        // START
+            axil_write(REG_CONFIG, {16'd0, 8'd6, 8'h12}); // mode_1x1=1 (bit 4), START=1 (bit 1), auto_drain=0
             wait_for_done();
 
             // 1. Validate 1x1 Raw 32-bit PSUM Accumulators in Bank A
@@ -1248,23 +1190,19 @@ module tb_npu_flex_functional;
 
             // 2. Drain Modes A, B, C, D for 1x1
             axil_write(REG_OUT_BASE, OUT_MODE_A_BASE);
-            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h10});
-            axil_write(REG_CTRL,     32'h0000_0004);
+            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h14});
             wait_for_done();
 
             axil_write(REG_OUT_BASE, OUT_MODE_B_BASE);
-            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h30});
-            axil_write(REG_CTRL,     32'h0000_0004);
+            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h34});
             wait_for_done();
 
             axil_write(REG_OUT_BASE, OUT_MODE_C_BASE);
-            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h50});
-            axil_write(REG_CTRL,     32'h0000_0004);
+            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h54});
             wait_for_done();
 
             axil_write(REG_OUT_BASE, OUT_MODE_D_BASE);
-            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h70});
-            axil_write(REG_CTRL,     32'h0000_0004);
+            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'h74});
             wait_for_done();
 
             for (int y_glob = 0; y_glob < 16; y_glob++) begin
@@ -1293,8 +1231,7 @@ module tb_npu_flex_functional;
             // 3. Mode E: 2x2 Stride-1 Asymmetric MaxPool (pool_s1_en = 1) on 13x13 window
             axil_write(REG_GEOM,     {8'd24, 8'd13, 8'd13, 4'd0, 4'd0});
             axil_write(REG_OUT_BASE, OUT_MODE_C_BASE);
-            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'hB0}); // mode_1x1=1, lut_en=1, pool_s1_en=1
-            axil_write(REG_CTRL,     32'h0000_0004);
+            axil_write(REG_CONFIG,   {16'd0, 8'd6, 8'hB4}); // mode_1x1=1, lut_en=1, pool_s1_en=1, START_DRAIN=1
             wait_for_done();
 
             begin

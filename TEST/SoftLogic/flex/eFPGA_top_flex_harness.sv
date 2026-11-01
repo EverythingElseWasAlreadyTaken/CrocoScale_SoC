@@ -442,10 +442,6 @@ module eFPGA_top #(
         .m_axi_rvalid         (fab_axi_rvalid),
         .m_axi_rready         (fab_axi_rready),
         .usr_irq_o            (fab_usr_irq),
-        .busy_o               (),
-        .done_o               (),
-        .current_pass_o       (),
-        .cycle_in_pass_o      (),
         .array_en_o           (fab_npu_array_en),
         .psum_systolic_en_o   (fab_npu_psum_systolic_en),
         .psum_skew_en_o       (fab_npu_psum_skew_en),
@@ -467,13 +463,7 @@ module eFPGA_top #(
         .psum_A_wdata_o       (fab_psum_A_wdata),
         .psum_B_addr_o        (fab_psum_B_addr),
         .psum_B_we_o          (fab_psum_B_we),
-        .psum_B_wdata_o       (fab_psum_B_wdata),
-        .preload_phase_o      (),
-        .dma_channel_to_load_o(),
-        .dma_bank_ptr_o       (),
-        .lut_phase_o          (),
-        .drain_phase_o        (),
-        .drain_step_o         ()
+        .psum_B_wdata_o       (fab_psum_B_wdata)
     );
 
 endmodule

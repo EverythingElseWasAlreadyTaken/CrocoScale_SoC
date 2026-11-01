@@ -66,17 +66,14 @@ module tb_npu_flex_yolo_tiny;
     localparam logic [31:0] MGR_SLOT0_STATUS = 32'h0000_1008;
 
     // Slot 0 Control CSR Offsets (Accessed by CPU at CTRL_BASE_ADDR + REG_*)
-    localparam logic [31:0] REG_CTRL        = 32'h0000_0000;
-    localparam logic [31:0] REG_STATUS      = 32'h0000_0004;
-    localparam logic [31:0] REG_CONFIG      = 32'h0000_0008;
-    localparam logic [31:0] REG_IRQ_STATUS  = 32'h0000_000C;
-    localparam logic [31:0] REG_ACT_BASE    = 32'h0000_0010;
-    localparam logic [31:0] REG_WEIGHT_BASE = 32'h0000_0014;
-    localparam logic [31:0] REG_OUT_BASE    = 32'h0000_0018;
-    localparam logic [31:0] REG_BIAS_BASE   = 32'h0000_001C;
-    localparam logic [31:0] REG_QUANT_BASE  = 32'h0000_0020;
-    localparam logic [31:0] REG_LUT_BASE    = 32'h0000_0024;
-    localparam logic [31:0] REG_GEOM        = 32'h0000_0028;
+    localparam logic [31:0] REG_CONFIG      = 32'h0000_0000;
+    localparam logic [31:0] REG_ACT_BASE    = 32'h0000_0004;
+    localparam logic [31:0] REG_WEIGHT_BASE = 32'h0000_0008;
+    localparam logic [31:0] REG_OUT_BASE    = 32'h0000_000C;
+    localparam logic [31:0] REG_BIAS_BASE   = 32'h0000_0010;
+    localparam logic [31:0] REG_QUANT_BASE  = 32'h0000_0014;
+    localparam logic [31:0] REG_LUT_BASE    = 32'h0000_0018;
+    localparam logic [31:0] REG_GEOM        = 32'h0000_001C;
 
     // System RAM Buffer Addresses (Byte Addresses inside 32 MB RAM)
     localparam logic [31:0] ACT_BUF_A_BASE   = 32'h0000_0000; // 1 MB Ping Buffer (L1 in, L2/L4/L6/L8 out)
@@ -803,6 +800,7 @@ module tb_npu_flex_yolo_tiny;
     endtask
 
     task automatic cpu_wait_for_npu_done();
+        @(posedge clk);
         while (soc_usr_irq[0] !== 1'b1) begin
             @(posedge clk);
         end
@@ -931,13 +929,11 @@ module tb_npu_flex_yolo_tiny;
                 for (int tx = 0; tx < tiles_x; tx++) begin
                     ty_5b = 5'(ty);
                     tx_5b = 5'(tx);
-                    // REG_CONFIG: [30]=img_h[8], [29]=img_w[8], [28]=tile_y[4], [27]=tile_x[4],
-                    //             [26:24]=cfg_cin[10:8], [18:8]=total_passes[10:0], [7:0]=cfg_flags
-                    cpu_csr_write(REG_CONFIG, {1'b0, h_9b[8], w_9b[8], ty_5b[4], tx_5b[4], cin_11b[10:8], 5'd0, passes_11b, cfg_flags});
                     cpu_csr_write(REG_GEOM,   {cin_11b[7:0], h_9b[7:0], w_9b[7:0], ty_5b[3:0], tx_5b[3:0]});
-                    cpu_csr_write(REG_CTRL,   32'h0000_0001); // START (Compute + Auto-Drain)
+                    // REG_CONFIG: [30]=img_h[8], [29]=img_w[8], [28]=tile_y[4], [27]=tile_x[4],
+                    //             [26:24]=cfg_cin[10:8], [18:8]=total_passes[10:0], [7:0]=cfg_flags | START(bit 1)
+                    cpu_csr_write(REG_CONFIG, {1'b0, h_9b[8], w_9b[8], ty_5b[4], tx_5b[4], cin_11b[10:8], 5'd0, passes_11b, cfg_flags | 8'h02});
                     cpu_wait_for_npu_done();
-                    cpu_csr_write(REG_IRQ_STATUS, 32'h0000_0001);
                 end
             end
         end

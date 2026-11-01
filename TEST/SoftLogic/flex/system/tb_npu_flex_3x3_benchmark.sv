@@ -37,17 +37,14 @@ module tb_npu_flex_3x3_benchmark;
     localparam int POOL_W_STRIDE = 32;
 
     // AXI-Lite Register Byte Offsets
-    localparam logic [9:0] REG_CTRL        = 10'h000;
-    localparam logic [9:0] REG_STATUS      = 10'h004;
-    localparam logic [9:0] REG_CONFIG      = 10'h008;
-    localparam logic [9:0] REG_IRQ_STATUS  = 10'h00C;
-    localparam logic [9:0] REG_ACT_BASE    = 10'h010;
-    localparam logic [9:0] REG_WEIGHT_BASE = 10'h014;
-    localparam logic [9:0] REG_OUT_BASE    = 10'h018;
-    localparam logic [9:0] REG_BIAS_BASE   = 10'h01C;
-    localparam logic [9:0] REG_QUANT_BASE  = 10'h020;
-    localparam logic [9:0] REG_LUT_BASE    = 10'h024;
-    localparam logic [9:0] REG_GEOM        = 10'h028;
+    localparam logic [9:0] REG_CONFIG      = 10'h000;
+    localparam logic [9:0] REG_ACT_BASE    = 10'h004;
+    localparam logic [9:0] REG_WEIGHT_BASE = 10'h008;
+    localparam logic [9:0] REG_OUT_BASE    = 10'h00C;
+    localparam logic [9:0] REG_BIAS_BASE   = 10'h010;
+    localparam logic [9:0] REG_QUANT_BASE  = 10'h014;
+    localparam logic [9:0] REG_LUT_BASE    = 10'h018;
+    localparam logic [9:0] REG_GEOM        = 10'h01C;
 
     localparam logic [31:0] ACT_BASE_ADDR    = 32'h0000_0000;
     localparam logic [31:0] WEIGHT_BASE_ADDR = 32'h0006_0000;
@@ -101,17 +98,7 @@ module tb_npu_flex_3x3_benchmark;
     wire         fab_axil_rvalid;
     wire         fab_axil_rready;
 
-    // Sequencer Status & Step Outputs
-    wire               seq_busy;
-    wire               seq_done;
-    wire [10:0]        current_pass;
-    wire [8:0]         cycle_in_pass;
-    wire               preload_phase;
-    wire signed [11:0] dma_channel_to_load;
-    wire [7:0][5:0]    dma_bank_ptr;
-    wire               lut_phase;
-    wire               drain_phase;
-    wire [10:0]        drain_step;
+    // Sequencer User Interrupt Output
     wire [3:0]         fab_usr_irq;
     wire [3:0]         soc_usr_irq;
 
@@ -519,10 +506,6 @@ module tb_npu_flex_3x3_benchmark;
         .m_axi_rvalid         (fab_axi_rvalid),
         .m_axi_rready         (fab_axi_rready),
         .usr_irq_o            (fab_usr_irq),
-        .busy_o               (seq_busy),
-        .done_o               (seq_done),
-        .current_pass_o       (current_pass),
-        .cycle_in_pass_o      (cycle_in_pass),
         .array_en_o           (fab_npu_array_en),
         .psum_systolic_en_o   (fab_npu_psum_systolic_en),
         .psum_skew_en_o       (fab_npu_psum_skew_en),
@@ -544,13 +527,7 @@ module tb_npu_flex_3x3_benchmark;
         .psum_A_wdata_o       (fab_psum_A_wdata),
         .psum_B_addr_o        (fab_psum_B_addr),
         .psum_B_we_o          (fab_psum_B_we),
-        .psum_B_wdata_o       (fab_psum_B_wdata),
-        .preload_phase_o      (preload_phase),
-        .dma_channel_to_load_o(dma_channel_to_load),
-        .dma_bank_ptr_o       (dma_bank_ptr),
-        .lut_phase_o          (lut_phase),
-        .drain_phase_o        (drain_phase),
-        .drain_step_o         (drain_step)
+        .psum_B_wdata_o       (fab_psum_B_wdata)
     );
 
     // =========================================================================
@@ -820,7 +797,6 @@ module tb_npu_flex_3x3_benchmark;
 
         axil_write(REG_ACT_BASE, ACT_BASE_ADDR);
         axil_write(REG_LUT_BASE, LUT_BASE_ADDR);
-        axil_write(REG_CONFIG,   {16'd0, 8'(TOTAL_PASSES), 8'h41}); // auto_drain=1, pool_en=1, lut_en=0
 
         done_blks  = 0;
         start_time = $time;
@@ -836,9 +812,10 @@ module tb_npu_flex_3x3_benchmark;
                         axil_write(REG_OUT_BASE,    OUT_BASE_ADDR    + cout_b * (8 * (POOL_H / 4) * POOL_W_STRIDE * 4));
                         axil_write(REG_BIAS_BASE,   BIAS_BASE_ADDR   + cout_b * 32);
                         axil_write(REG_QUANT_BASE,  QUANT_BASE_ADDR  + cout_b * 32);
-                        axil_write(REG_CTRL,        32'h0000_0001);
+                        axil_write(REG_CONFIG,      {16'd0, 8'(TOTAL_PASSES), 8'h43}); // auto_drain=1, START=1, pool_en=1
 
-                        while (!seq_done) @(posedge clk);
+                        @(posedge clk);
+                        while (soc_usr_irq[0] !== 1'b1) @(posedge clk);
                         @(negedge clk);
 
                         done_blks++;
