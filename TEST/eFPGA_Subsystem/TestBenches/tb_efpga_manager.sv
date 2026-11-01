@@ -320,6 +320,48 @@ module tb_efpga_manager;
         end
 
         // ---------------------------------------------------------------------
+        // TEST 3B: CONFIG_DMA_WINDOW @ 0x8000 - 0xFFFF (Wildcarded INCR Burst)
+        // ---------------------------------------------------------------------
+        axi_write(32'h8000, 32'h01020304);
+        if (efpga_config_data_o !== 32'h04030201) begin
+            $display("[FAIL] CONFIG_DMA_WINDOW (0x8000): efpga_config_data_o mismatch! Got 0x%08X (expected 0x04030201)", efpga_config_data_o);
+            errors++;
+        end
+
+        axi_write(32'h8004, 32'h55667788);
+        if (efpga_config_data_o !== 32'h88776655) begin
+            $display("[FAIL] CONFIG_DMA_WINDOW (0x8004): efpga_config_data_o mismatch! Got 0x%08X (expected 0x88776655)", efpga_config_data_o);
+            errors++;
+        end
+
+        axi_write(32'hFFFC, 32'hDEADCAFE);
+        if (efpga_config_data_o !== 32'hFECAADDE) begin
+            $display("[FAIL] CONFIG_DMA_WINDOW (0xFFFC): efpga_config_data_o mismatch! Got 0x%08X (expected 0xFECAADDE)", efpga_config_data_o);
+            errors++;
+        end
+
+        axi_read(32'h000C, rdata);
+        if (rdata !== 32'd5) begin
+            $display("[FAIL] CONFIG_COUNT after 3 DMA window writes expected 5, got %0d", rdata);
+            errors++;
+        end else begin
+            $display("[PASS] CONFIG_DMA_WINDOW (0x8000-0xFFFF): Incrementing writes byte-swapped and counted (CONFIG_COUNT=5)");
+        end
+
+        axi_read(32'h8000, rdata);
+        if (rdata !== 32'h00000000) begin
+            $display("[FAIL] CONFIG_DMA_WINDOW readback @ 0x8000 expected 0x00000000, got 0x%08X", rdata);
+            errors++;
+        end
+        axi_read(32'hFFFC, rdata);
+        if (rdata !== 32'h00000000) begin
+            $display("[FAIL] CONFIG_DMA_WINDOW readback @ 0xFFFC expected 0x00000000, got 0x%08X", rdata);
+            errors++;
+        end else begin
+            $display("[PASS] CONFIG_DMA_WINDOW (0x8000-0xFFFF): Write-only window reads back 0x00000000");
+        end
+
+        // ---------------------------------------------------------------------
         // TEST 4: SLOT_CTRL @ 0x1004 & SLOT_STATUS @ 0x1008
         // ---------------------------------------------------------------------
         if (slot_usr_irq_en_o[0] !== 1'b0 || slot_pmod_en_o[0] !== 1'b0) begin

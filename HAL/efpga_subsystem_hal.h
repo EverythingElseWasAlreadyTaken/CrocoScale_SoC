@@ -24,7 +24,8 @@ extern "C" {
  *                       - Region 0 Limit       : mgr_base + 0x101C (PFN [31:12], bits [11:2] trunc)
  *                       - Region 1 Base        : mgr_base + 0x1020 (PFN [31:12], bits [11:2] trunc)
  *                       - Region 1 Limit       : mgr_base + 0x1024 (PFN [31:12], bits [11:2] trunc)
- *    0x1028+          | Unmapped PMP           | Reads return 0xBAD00002
+ *    0x1028 - 0x7FFF  | Unmapped PMP / Slots   | Reads return 0xBAD00002 / 0xBAD00003
+ *    0x8000 - 0xFFFF  | Bitstream DMA Window   | 32 KB wildcarded INCR burst aperture for bitstream loading
  *
  *    [!] PMP Security Lock:
  *        PMP registers are hardware write-protected. Writes are ignored unless the slot is
@@ -75,6 +76,10 @@ extern "C" {
 #define EFPGA_REG_PMP_BASE(region)            (0x1018U + ((uint32_t)(region) * 0x08U))
 #define EFPGA_REG_PMP_LIMIT(region)           (0x101CU + ((uint32_t)(region) * 0x08U))
 
+/* Bitstream INCR DMA Window (0x8000 - 0xFFFF) */
+#define EFPGA_REG_CONFIG_DMA_WINDOW           0x8000U  /**< 32 KB wildcarded INCR DMA bitstream window base (WO) */
+#define EFPGA_CONFIG_DMA_WINDOW_SIZE          0x8000U  /**< 32,768 bytes (8,192 32-bit words) */
+
 /* ===============================================================================================
  * Memory-Mapped Register Layout (Unified MMIO Struct)
  * =============================================================================================== */
@@ -122,6 +127,12 @@ typedef volatile struct __attribute__((packed, aligned(4))) {
  * Use this pointer to exchange data directly with user accelerators instantiated in the fabric.
  */
 #define EFPGA_FABRIC_PORT(fabric_base_addr) ((volatile uint32_t *)(uintptr_t)(fabric_base_addr))
+
+/**
+ * @brief Obtain a pointer to the 32 KB wildcarded INCR DMA Bitstream Window (mgr_base + 0x8000).
+ * Use this base address for DMA engines that only support incrementing (INCR) burst transfers.
+ */
+#define EFPGA_CONFIG_DMA_PORT(base_addr) ((volatile uint32_t *)((uintptr_t)(base_addr) + EFPGA_REG_CONFIG_DMA_WINDOW))
 
 /* ===============================================================================================
  * Register Bitfield Definitions

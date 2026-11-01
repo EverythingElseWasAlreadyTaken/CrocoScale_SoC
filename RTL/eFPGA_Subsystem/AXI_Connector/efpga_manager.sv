@@ -14,7 +14,7 @@
  * 0x008  | CONFIG_DATA    | W   | [31:0]: Config Payload (translates little-endian CPU words to big-endian fabric frames)
  * 0x00C  | CONFIG_COUNT   | R   | [31:0]: Number of words written to CONFIG_DATA
  *
- * PER-SLOT REGISTERS (Base Address: 0x1000 + (Slot_Index * 0x1000))
+ * PER-SLOT REGISTERS (Base Address: 0x1000 + (Slot_Index * 0x1000), up to 7 Slots: 0x1000 - 0x7FFF)
  * -----------------------------------------------------------------------------------------------
  * Offset | Register Name  | R/W | Description / Bit Mapping
  * -------|----------------|-----|----------------------------------------------------------------
@@ -34,6 +34,12 @@
  * 0x01C  | PMP_LIMIT_0    | R/W*| [31:0]: Limit address for PMP Region 0 (Lower bits overloaded for PROT)
  * 0x020  | PMP_BASE_1     | R/W*| [31:0]: Base address for PMP Region 1
  * 0x024  | PMP_LIMIT_1    | R/W*| [31:0]: Limit address for PMP Region 1 (Lower bits overloaded for PROT)
+ *
+ * BITSTREAM DMA WINDOW (Base Address: 0x8000 - 0xFFFF, 32 KB)
+ * -----------------------------------------------------------------------------------------------
+ * Offset        | Register Name     | R/W | Description / Bit Mapping
+ * --------------|-------------------|-----|------------------------------------------------------
+ * 0x8000-0xFFFF | CONFIG_DMA_WINDOW | W   | [31:0]: Wildcarded INCR DMA Bitstream Window (8,192 words; aliases CONFIG_DATA)
  * =============================================================================================== */
 
 module efpga_manager #(
@@ -145,7 +151,7 @@ module efpga_manager #(
 
     // AXI Write Handshake
     wire axi_write_en = (s_axil_awvalid && s_axil_wvalid && !axi_awready && !axi_wready && !axi_bvalid);
-    wire is_slot_write = axi_write_en && (local_awaddr >= 16'h1000) && (aw_slot_idx < 4'(NUM_SLOTS));
+    wire is_slot_write = axi_write_en && !local_awaddr[15] && (local_awaddr >= 16'h1000) && (aw_slot_idx < 4'(NUM_SLOTS));
     wire [11:0] slot_aw_offset = local_awaddr[11:0] & 12'hFFC;
 
     // PMP Register Address Decoding
@@ -524,7 +530,12 @@ module efpga_manager #(
                 axi_wready  <= 1'b1;
                 axi_bvalid  <= 1'b1;
 
-                if (local_awaddr < 16'h1000) begin
+                if (local_awaddr[15]) begin
+                    config_count_reg       <= config_count_reg + 32'd1;
+                    efpga_config_data_o    <= {s_axil_wdata[7:0], s_axil_wdata[15:8], s_axil_wdata[23:16], s_axil_wdata[31:24]};
+                    efpga_config_we_o      <= 1'b1;
+                    user_design_loaded_reg <= 1'b1;
+                end else if (local_awaddr < 16'h1000) begin
                     case (local_awaddr[11:0] & 12'hFFC)
                         12'h004: begin
                             if (s_axil_wstrb[0]) begin
@@ -586,7 +597,9 @@ module efpga_manager #(
                 axi_arready <= 1'b1;
                 axi_rvalid  <= 1'b1;
 
-                if (local_araddr < 16'h1000) begin
+                if (local_araddr[15]) begin
+                    axi_rdata <= 32'h00000000;
+                end else if (local_araddr < 16'h1000) begin
                     case (local_araddr[11:0] & 12'hFFC)
                         12'h000: axi_rdata <= HW_VERSION;
                         12'h004: axi_rdata <= {27'd0, bitbang_sticky_reg, efpga_bitbang_active_i, user_design_loaded_reg, efpga_com_active_i, 1'b0};
