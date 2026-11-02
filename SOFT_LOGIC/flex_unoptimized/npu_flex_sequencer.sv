@@ -89,12 +89,6 @@ module npu_flex_sequencer #(
     // User Interrupt Output (to efpga_manager)
     output logic [3:0]                                   usr_irq_o,
 
-    // Status & Progression Outputs
-    output logic                                         busy_o,
-    output logic                                         done_o,
-    output logic [10:0]                                  current_pass_o,
-    output logic [8:0]                                   cycle_in_pass_o,
-
     // Array Mode Controls
     output logic                                         array_en_o,
     output logic                                         psum_systolic_en_o,
@@ -125,15 +119,7 @@ module npu_flex_sequencer #(
     output logic signed [PSUM_WIDTH-1:0]                 psum_A_wdata_o,
     output logic [7:0]                                   psum_B_addr_o,
     output logic [ARRAY_WIDTH-1:0]                       psum_B_we_o,
-    output logic signed [PSUM_WIDTH-1:0]                 psum_B_wdata_o,
-
-    // Phase & Drain Synchronization
-    output logic                                         preload_phase_o,
-    output logic signed [11:0]                           dma_channel_to_load_o,
-    output logic [7:0][5:0]                              dma_bank_ptr_o,
-    output logic                                         lut_phase_o,
-    output logic                                         drain_phase_o,
-    output logic [10:0]                                  drain_step_o
+    output logic signed [PSUM_WIDTH-1:0]                 psum_B_wdata_o
 );
 
     localparam logic [2:0] SEQ_COMPUTE = 3'd2;
@@ -142,7 +128,6 @@ module npu_flex_sequencer #(
     // Decoded CSR Signals
     wire        start_pulse;
     wire        start_drain_pulse;
-    wire        soft_reset;
     wire        auto_drain;
     wire        mode_1x1;
     wire        lut_en;
@@ -162,9 +147,10 @@ module npu_flex_sequencer #(
     wire [31:0] lut_base;
 
     wire [10:0] total_passes = (csr_total_passes != 11'd0) ? csr_total_passes : 11'(TOTAL_PASSES);
-    wire        sys_rst_n    = rst_n && !soft_reset;
+    wire        sys_rst_n    = rst_n;
 
     wire [2:0]                    state;
+    wire                          fsm_done;
     wire [10:0]                   pass_cnt;
     wire [8:0]                    k_cnt;
     wire [10:0]                   drain_cnt;
@@ -177,7 +163,6 @@ module npu_flex_sequencer #(
 
     wire                          dma_pass_ready;
     wire [7:0]                    bank_read_used;
-    wire [10:0]                   dma_ch;
     wire [7:0]                    dma_we;
     wire [7:0][8:0]               dma_addr;
     wire [7:0][7:0]               dma_wdata;
@@ -193,19 +178,14 @@ module npu_flex_sequencer #(
     wire [7:0]                    lut_wdata;
     wire                          lut_we;
 
-    assign current_pass_o        = pass_cnt;
-    assign cycle_in_pass_o       = k_cnt;
-    assign drain_step_o          = drain_cnt;
-    assign dma_channel_to_load_o = (state == SEQ_COMPUTE && dma_ch > 11'd0) ? $signed({1'b0, dma_ch}) : -12'sd1;
+    assign array_en_o          = (state == SEQ_COMPUTE);
+    assign psum_systolic_en_o  = (state == SEQ_COMPUTE);
+    assign psum_skew_en_o      = (state == SEQ_COMPUTE) || (state == SEQ_DRAIN);
+    assign compute_bank_swap_o = (state == SEQ_COMPUTE) ? swap_val : 1'b0;
 
-    assign array_en_o            = (state == SEQ_COMPUTE);
-    assign psum_systolic_en_o    = (state == SEQ_COMPUTE);
-    assign psum_skew_en_o        = (state == SEQ_COMPUTE) || (state == SEQ_DRAIN);
-    assign compute_bank_swap_o   = (state == SEQ_COMPUTE) ? swap_val : 1'b0;
-
-    assign act_sram_we_o         = (state == SEQ_DRAIN) ? drain_act_we    : comp_act_we;
-    assign act_sram_addr_o       = (state == SEQ_DRAIN) ? drain_act_addr  : comp_act_addr;
-    assign act_sram_wdata_o      = (state == SEQ_DRAIN) ? drain_act_wdata : dma_wdata;
+    assign act_sram_we_o       = (state == SEQ_DRAIN) ? drain_act_we    : comp_act_we;
+    assign act_sram_addr_o     = (state == SEQ_DRAIN) ? drain_act_addr  : comp_act_addr;
+    assign act_sram_wdata_o    = (state == SEQ_DRAIN) ? drain_act_wdata : dma_wdata;
 
     // 1. AXI4-Lite Control & Status Register File
     npu_flex_axil_csr #(
@@ -238,7 +218,6 @@ module npu_flex_sequencer #(
         .s_axil_rready      (s_axil_rready),
         .start_pulse_o      (start_pulse),
         .start_drain_pulse_o(start_drain_pulse),
-        .soft_reset_o       (soft_reset),
         .auto_drain_o       (auto_drain),
         .mode_1x1_o         (mode_1x1),
         .lut_en_o           (lut_en),
@@ -257,8 +236,7 @@ module npu_flex_sequencer #(
         .quant_base_o       (quant_base),
         .lut_base_o         (lut_base),
         .usr_irq_o          (usr_irq_o),
-        .fsm_busy_i         (busy_o),
-        .fsm_done_i         (done_o)
+        .fsm_done_i         (fsm_done)
     );
 
     // 2. Central FSM & Progression Counters
@@ -278,13 +256,13 @@ module npu_flex_sequencer #(
         .lut_we_i           (lut_we),
         .writer_done_i      (writer_done),
         .state_o            (state),
-        .busy_o             (busy_o),
-        .done_o             (done_o),
+        .busy_o             (),
+        .done_o             (fsm_done),
         .pass_cnt_o         (pass_cnt),
         .k_cnt_o            (k_cnt),
-        .preload_phase_o    (preload_phase_o),
-        .lut_phase_o        (lut_phase_o),
-        .drain_phase_o      (drain_phase_o),
+        .preload_phase_o    (),
+        .lut_phase_o        (),
+        .drain_phase_o      (),
         .drain_cnt_o        (drain_cnt),
         .preload_done_o     (preload_done),
         .pass_advance_o     (pass_advance),
@@ -320,8 +298,8 @@ module npu_flex_sequencer #(
         .drain_cnt_i          (drain_cnt),
         .bank_read_used_i     (bank_read_used),
         .dma_pass_ready_o     (dma_pass_ready),
-        .dma_channel_to_load_o(dma_ch),
-        .dma_bank_ptr_o       (dma_bank_ptr_o),
+        .dma_channel_to_load_o(),
+        .dma_bank_ptr_o       (),
         .act_base_i           (act_base),
         .weight_base_i        (weight_base),
         .bias_base_i          (bias_base),

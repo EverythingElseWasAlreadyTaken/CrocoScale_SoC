@@ -755,6 +755,8 @@ module tb_npu_flex_3x3_benchmark;
     initial begin
         string mem_dir;
         longint start_time, total_cycles;
+        longint ideal_macs, ideal_cycles;
+        real compute_eff, e2e_eff;
         int max_blocks;
         int done_blks;
         int errs, tol_ok, exact_ok, max_diff, diff_val;
@@ -860,13 +862,22 @@ module tb_npu_flex_3x3_benchmark;
             end
         end
 
+        ideal_macs   = longint'(max_blocks) * 16 * 16 * 8 * longint'(CIN) * 9; // 84,934,656 MACs for 36 blocks
+        ideal_cycles = ideal_macs / 64;                                        // 1,327,104 cycles for 36 blocks
+        compute_eff  = (real'(ideal_cycles) / real'(max_blocks * TOTAL_PASSES * 264)) * 100.0;
+        e2e_eff      = (real'(ideal_cycles) / real'(total_cycles)) * 100.0;
+
         $display("\n=====================================================================================");
         $display("   8-BANK (4x2) + AXI-LITE + AXI4 BENCHMARK SUMMARY (%0d BLOCKS, %0d POOLED OUTPUTS)",
                  max_blocks, max_blocks * 512);
         $display("=====================================================================================");
-        $display("   Total Cycles          : %0d", total_cycles);
-        $display("   Exact Matches (diff 0): %0d", exact_ok);
-        $display("   Tol Matches   (diff 1): %0d", tol_ok);
+        $display("   Total Latency         : %0d clock cycles (%0d cycles/block)", total_cycles, total_cycles / max_blocks);
+        $display("   Ideal Peak Cycles     : %0d clock cycles (at 64 MACs/cycle)", ideal_cycles);
+        $display("   Mathematical MACs     : %0d operations", ideal_macs);
+        $display("   Compute Array Eff     : %0.2f%%", compute_eff);
+        $display("   End-to-End System Eff : %0.2f%%", e2e_eff);
+        $display("   Exact Matches (diff 0): %0d (%0.2f%%)", exact_ok, (real'(exact_ok) / real'(max_blocks * 512)) * 100.0);
+        $display("   Tol Matches   (diff 1): %0d (%0.2f%%)", tol_ok, (real'(tol_ok) / real'(max_blocks * 512)) * 100.0);
         $display("   Errors        (diff>1): %0d (max diff: %0d)", errs, max_diff);
         $display("=====================================================================================\n");
 
